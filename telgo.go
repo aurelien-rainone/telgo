@@ -123,26 +123,26 @@ type CmdList map[string]Cmd
 // the connection got terminated. This can be used to abort long running telgo
 // commands.
 type Client struct {
-	Conn     net.Conn
-	UserData interface{}
-	Cancel   chan bool
-	scanner  *bufio.Scanner
-	writer   *bufio.Writer
-	prompt   string
-	commands *CmdList
-	iacout   chan []byte
-	stdout   chan []byte
-	quitSend chan bool
+	Conn       net.Conn
+	UserData   interface{}
+	Cancel     chan bool
+	scanner    *bufio.Scanner
+	writer     *bufio.Writer
+	prompt     string
+	cmdHandler Cmd
+	iacout     chan []byte
+	stdout     chan []byte
+	quitSend   chan bool
 }
 
-func newClient(conn net.Conn, prompt string, commands *CmdList, userdata interface{}) (c *Client) {
+func newClient(conn net.Conn, prompt string, cmdHandler Cmd, userdata interface{}) (c *Client) {
 	tl.Println("new client from:", conn.RemoteAddr())
 	c = &Client{}
 	c.Conn = conn
 	c.scanner = bufio.NewScanner(conn)
 	c.writer = bufio.NewWriter(conn)
 	c.prompt = prompt
-	c.commands = commands
+	c.cmdHandler = cmdHandler
 	c.UserData = userdata
 	c.stdout = make(chan []byte)
 	c.quitSend = make(chan bool)
@@ -289,13 +289,9 @@ func (c *Client) handleCmd(cmdstr string, done chan<- bool) {
 	case <-c.Cancel: // consume potentially pending cancel request
 	default:
 	}
-	for cmd, cmdfunc := range *c.commands {
-		if cmdslice[0] == cmd {
-			quit = cmdfunc(c, cmdslice)
-			return
-		}
-	}
-	c.Sayln("unknown command '%s'", cmdslice[0])
+
+	quit = c.cmdHandler(c, cmdslice)
+	return
 }
 
 // parse the telnet command and send out out-of-band responses to them
@@ -504,10 +500,10 @@ func (c *Client) handle() {
 // Server contains all values needed to run the server. Use NewServer to create
 // and Run to actually run the server.
 type Server struct {
-	addr     string
-	prompt   string
-	commands CmdList
-	userdata interface{}
+	addr       string
+	prompt     string
+	cmdHandler Cmd
+	userdata   interface{}
 }
 
 // NewServer creates a new telnet server struct. addr is the address to bind/listen to on and will be
@@ -515,11 +511,11 @@ type Server struct {
 // for a new command.
 // commands is a list of telgo commands to be used and userdata will be made available to called telgo commands
 // through the client struct.
-func NewServer(addr, prompt string, commands CmdList, userdata interface{}) (s *Server) {
+func NewServer(addr, prompt string, cmdHandler Cmd, userdata interface{}) (s *Server) {
 	s = &Server{}
 	s.addr = addr
 	s.prompt = prompt
-	s.commands = commands
+	s.cmdHandler = cmdHandler
 	s.userdata = userdata
 	return s
 }
@@ -541,7 +537,7 @@ func (s *Server) Run() error {
 			return err
 		}
 
-		c := newClient(conn, s.prompt, &s.commands, s.userdata)
+		c := newClient(conn, s.prompt, s.cmdHandler, s.userdata)
 		go c.handle()
 	}
 }
