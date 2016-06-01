@@ -49,6 +49,8 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
+	"time"
 	"unicode"
 )
 
@@ -504,6 +506,8 @@ type Server struct {
 	prompt     string
 	cmdHandler Cmd
 	userdata   interface{}
+	quitChan   chan struct{}
+	waitGroup  sync.WaitGroup
 }
 
 // NewServer creates a new telnet server struct. addr is the address to bind/listen to on and will be
@@ -517,27 +521,61 @@ func NewServer(addr, prompt string, cmdHandler Cmd, userdata interface{}) (s *Se
 	s.prompt = prompt
 	s.cmdHandler = cmdHandler
 	s.userdata = userdata
+	s.quitChan = make(chan struct{})
+	s.waitGroup = sync.WaitGroup{}
 	return s
+}
+
+func (s *Server) Quit() {
+	s.quitChan <- struct{}{}
 }
 
 // Run opens the server socket and runs the telnet server which spawns go routines for every connecting client.
 func (s *Server) Run() error {
-	tl.Println("listening on", s.addr)
-
-	server, err := net.Listen("tcp", s.addr)
+	tcpAddr, err := net.ResolveTCPAddr("tcp4", s.addr)
 	if err != nil {
-		tl.Println("Listen() Error:", err)
-		return err
+		return fmt.Errorf("Couldn't resolve address (%v)", err)
+	}
+	listener, err := net.ListenTCP("tcp", tcpAddr)
+	if err != nil {
+		return fmt.Errorf("Couldn't initiate TCP listening (%v)", err)
 	}
 
+	// we want to close the listener when we'll be quitting
+	s.waitGroup.Add(1)
+	defer func() {
+		listener.Close()
+		// wait that all opened goroutines are closed
+		s.waitGroup.Done()
+	}()
+
 	for {
-		conn, err := server.Accept()
-		if err != nil {
-			tl.Println("Accept() Error:", err)
-			return err
+		// loop forever...
+		select {
+		case <-s.quitChan:
+			// ...until the server quits
+			return nil
+
+		default:
 		}
 
-		c := newClient(conn, s.prompt, s.cmdHandler, s.userdata)
-		go c.handle()
+		acceptTimeout := time.Second
+
+		// listening for incoming TCP connections
+		listener.SetDeadline(time.Now().Add(acceptTimeout))
+		conn, err := listener.AcceptTCP()
+		if err != nil {
+			// wrong connection, leave it
+			continue
+		}
+
+		s.waitGroup.Add(1)
+		go func() {
+
+			c := newClient(conn, s.prompt, s.cmdHandler, s.userdata)
+			c.handle()
+			s.waitGroup.Done()
+		}()
+		// start a new goroutine, one more to wait for when we'll be quitting
 	}
 }
