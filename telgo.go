@@ -510,14 +510,13 @@ type Server struct {
 	waitGroup  sync.WaitGroup
 }
 
-// NewServer creates a new telnet server struct. addr is the address to bind/listen to on and will be
-// passed through to net.Listen(). The prompt will be sent to the client whenever the telgo server is ready
+// NewServer creates a new telnet server struct, using listener to bind to clients.
+//
+// The prompt will be sent to the client whenever the telgo server is ready
 // for a new command.
-// commands is a list of telgo commands to be used and userdata will be made available to called telgo commands
-// through the client struct.
-func NewServer(addr, prompt string, cmdHandler Cmd, userdata interface{}) (s *Server) {
+// cmdHandler will be called each time the clients sends a command
+func NewServer(prompt string, cmdHandler Cmd, userdata interface{}) (s *Server) {
 	s = &Server{}
-	s.addr = addr
 	s.prompt = prompt
 	s.cmdHandler = cmdHandler
 	s.userdata = userdata
@@ -530,17 +529,9 @@ func (s *Server) Quit() {
 	s.quitChan <- struct{}{}
 }
 
-// Run opens the server socket and runs the telnet server which spawns go routines for every connecting client.
-func (s *Server) Run() error {
-	tcpAddr, err := net.ResolveTCPAddr("tcp4", s.addr)
-	if err != nil {
-		return fmt.Errorf("Couldn't resolve address (%v)", err)
-	}
-	listener, err := net.ListenTCP("tcp", tcpAddr)
-	if err != nil {
-		return fmt.Errorf("Couldn't initiate TCP listening (%v)", err)
-	}
-
+// Run opens the server socket and runs the telnet server which spawns go
+// routines for every connecting client.
+func (s *Server) Run(listener *net.TCPListener) error {
 	// we want to close the listener when we'll be quitting
 	s.waitGroup.Add(1)
 	defer func() {
@@ -571,7 +562,6 @@ func (s *Server) Run() error {
 
 		s.waitGroup.Add(1)
 		go func() {
-
 			c := newClient(conn, s.prompt, s.cmdHandler, s.userdata)
 			c.handle()
 			s.waitGroup.Done()
